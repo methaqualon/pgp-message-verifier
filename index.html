@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PGP Message Verifier</title>
+    <script src="https://unpkg.com/openpgp@5.5.0/dist/openpgp.min.js"></script>
+   <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f4f4f4; color: #333; padding: 20px; margin: 0; }
+        .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 40px; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
+        
+        h1 { border-bottom: 2px solid #eee; padding-bottom: 20px; margin-top: 0; font-size: 1.5rem; letter-spacing: -0.5px; display: flex; align-items: center; }
+        h1 span { margin-right: 10px; }
+
+        /* Блок верификации */
+        #status-container { 
+            display: none; 
+            background: #fff; border: 1px solid #eee; border-radius: 12px; 
+            margin: 30px 0; overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+            transition: all 0.3s ease;
+        }
+
+        .status-content {
+            display: flex; align-items: center; padding: 25px;
+        }
+
+        /* Аватар */
+        .art-wrapper {
+            margin-right: 25px;
+            flex-shrink: 0;
+            display: flex; flex-direction: column; align-items: center;
+        }
+        
+        canvas {
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        canvas:hover { transform: scale(1.02); }
+
+        .download-btn {
+            margin-top: 10px; font-size: 0.7rem; color: #888; text-decoration: none;
+            border: 1px solid #eee; padding: 4px 12px; border-radius: 20px;
+            background: #fff; cursor: pointer; transition: all 0.2s;
+        }
+        .download-btn:hover { background: #f5f5f5; color: #333; border-color: #ddd; }
+
+        /* Центральная часть (Статус) */
+        .status-main { flex-grow: 1; }
+        .status-title { font-size: 1.8rem; font-weight: 800; margin-bottom: 5px; color: #333; line-height: 1.1; }
+        .key-id { font-family: "Consolas", monospace; font-size: 1rem; color: #555; background: #f0f0f0; padding: 4px 8px; border-radius: 4px; display: inline-block;}
+
+        /* Правая часть (Образование) */
+        .status-edu {
+            border-left: 1px solid #e0e0e0;
+            padding-left: 25px;
+            margin-left: 25px;
+            max-width: 200px;
+            font-size: 0.8rem;
+            color: #666;
+            line-height: 1.4;
+        }
+        .status-edu strong { color: #333; display: block; margin-bottom: 4px; font-size: 0.9rem; }
+
+        /* Цвета статусов */
+        .valid { border-left: 8px solid #10b981 !important; }
+        .valid .status-title { color: #059669; }
+        
+        .invalid { border-left: 8px solid #ef4444 !important; }
+        .invalid .status-title { color: #dc2626; }
+
+        /* Остальное */
+        .label { font-size: 0.75rem; font-weight: 700; color: #999; margin-bottom: 8px; text-transform: uppercase; margin-top: 30px; letter-spacing: 1px;}
+        .box { 
+            background: #f8f9fa; border: 1px solid #e9ecef; padding: 20px; 
+            border-radius: 6px; white-space: pre-wrap; word-break: break-all; 
+            font-family: "Consolas", monospace; font-size: 0.9rem; color: #495057;
+        }
+        
+        /* Мобильная адаптация */
+        @media (max-width: 700px) {
+            .status-content { flex-direction: column; text-align: center; }
+            .status-edu { border-left: none; border-top: 1px solid #eee; padding-left: 0; margin-left: 0; padding-top: 20px; margin-top: 20px; max-width: 100%; border-left: 0;}
+            .art-wrapper { margin-right: 0; margin-bottom: 20px; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1><span>🔐</span> PGP Message Verifier</h1>
+
+    <div id="status-container">
+        <div class="status-content">
+            <!-- Аватар -->
+            <div class="art-wrapper">
+                <canvas id="geoArt" width="400" height="400" style="width: 180px; height: 180px;"></canvas>
+                <a id="downloadLink" class="download-btn" onclick="downloadArt()">Download Avatar</a>
+            </div>
+            
+            <div class="status-main">
+                <div class="status-title" id="status-text">INITIALIZING...</div>
+                <div id="key-display"></div>
+            </div>
+
+            <div class="status-edu">
+                <strong>Why PGP?</strong>
+                Mathematical proof of identity. It ensures this message comes from the key owner and hasn't been altered.<br>
+                <i>Trust cryptography, not nicknames.</i>
+            </div>
+        </div>
+    </div>
+
+    <div class="label">Signed Message Content</div>
+    <div id="msgBox" class="box">Waiting for data...</div>
+
+    <div class="label">Public Key Fingerprint</div>
+    <div id="keyBox" class="box" style="font-size: 0.75rem; color: #888;">...</div>
+</div>
+
+<script>
+    // --- (BAUHAUS STYLE) ---
+    function generateGeometricArt(canvasId, seedStr, keyIdDisplay) {
+        const canvas = document.getElementById(canvasId);
+        const ctx = canvas.getContext('2d');
+        const size = canvas.width;
+        
+        let hash = 0;
+        for (let i = 0; i < seedStr.length; i++) hash = seedStr.charCodeAt(i) + ((hash << 5) - hash);
+        const rand = () => { const x = Math.sin(hash++) * 10000; return x - Math.floor(x); }
+
+        const palettes = [
+            ['#264653', '#2a9d8f', '#e9c46a', '#f4a261', '#e76f51'],
+            ['#003049', '#d62828', '#f77f00', '#fcbf49', '#eae2b7'],
+            ['#355070', '#6d597a', '#b56576', '#e56b6f', '#eaac8b'],
+            ['#2b2d42', '#8d99ae', '#edf2f4', '#ef233c', '#d90429']
+        ];
+        const palette = palettes[Math.floor(rand() * palettes.length)];
+        
+        ctx.fillStyle = palette[0];
+        ctx.fillRect(0, 0, size, size);
+
+        const cells = 4; 
+        const cellSize = size / cells;
+
+        for (let x = 0; x < cells; x++) {
+            for (let y = 0; y < cells; y++) {
+                const shapeType = Math.floor(rand() * 4);
+                const color = palette[Math.floor(rand() * palette.length)];
+                ctx.fillStyle = color;
+                const cx = x * cellSize; const cy = y * cellSize;
+
+                ctx.save();
+                ctx.translate(cx + cellSize/2, cy + cellSize/2);
+                ctx.rotate(Math.floor(rand() * 4) * (Math.PI / 2));
+                ctx.translate(-(cx + cellSize/2), -(cy + cellSize/2));
+
+                if (shapeType === 0) { ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + cellSize, cy); ctx.lineTo(cx, cy + cellSize); ctx.fill(); } 
+                else if (shapeType === 1) { ctx.beginPath(); ctx.arc(cx, cy, cellSize, 0, Math.PI * 0.5); ctx.lineTo(cx, cy); ctx.fill(); } 
+                else if (shapeType === 2) { ctx.fillRect(cx, cy, cellSize/2, cellSize); } 
+                else { if (rand() > 0.5) { ctx.beginPath(); ctx.arc(cx + cellSize/2, cy + cellSize/2, cellSize/3, 0, Math.PI*2); ctx.fill(); } }
+                ctx.restore();
+            }
+        }
+
+        // ВОДЯНОЙ ЗНАК (Увеличенный шрифт)
+        ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
+        ctx.fillRect(0, size - 50, size, 50); // Высота полосы 50
+        
+        ctx.font = "bold 24px Consolas, monospace"; // Шрифт 24px
+        ctx.fillStyle = "#ffffff";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("PGP • " + keyIdDisplay, size / 2, size - 25);
+    }
+
+    function downloadArt() {
+        const canvas = document.getElementById('geoArt');
+        const link = document.createElement('a');
+        link.download = 'PGP_Avatar.png';
+        link.href = canvas.toDataURL();
+        link.click();
+    }
+
+    // --- ЛОГИКА ---
+    async function verify() {
+        const container = document.getElementById('status-container');
+        const statusText = document.getElementById('status-text');
+        const keyDisplay = document.getElementById('key-display');
+        const msgEl = document.getElementById('msgBox');
+        const keyEl = document.getElementById('keyBox');
+
+        try {
+            const hash = window.location.hash.substring(1);
+            if (!hash) throw new Error("URL is empty.");
+            const params = new URLSearchParams(hash);
+            const msgB64 = params.get('msg');
+            const keyB64 = params.get('key');
+            if (!msgB64 || !keyB64) throw new Error("Missing data in URL.");
+
+            const msgText = new TextDecoder().decode(Uint8Array.from(atob(msgB64), c => c.charCodeAt(0)));
+            const keyText = new TextDecoder().decode(Uint8Array.from(atob(keyB64), c => c.charCodeAt(0)));
+
+            msgEl.textContent = msgText;
+            keyEl.textContent = keyText;
+
+            container.style.display = 'block';
+
+            const publicKey = await openpgp.readKey({ armoredKey: keyText });
+            const message = await openpgp.readCleartextMessage({ cleartextMessage: msgText });
+            const result = await openpgp.verify({ message: message, verificationKeys: publicKey });
+            const { verified, keyID } = result.signatures[0];
+            await verified; 
+
+            // SUCCESS
+            container.className = "valid";
+            const keyHex = keyID.toHex().toUpperCase();
+            
+            statusText.innerHTML = "SIGNATURE VALID";
+            keyDisplay.innerHTML = `<span class="key-id">Key ID: ${keyHex}</span>`;
+
+            generateGeometricArt("geoArt", keyHex, keyHex);
+
+        } catch (e) {
+            container.style.display = 'block';
+            container.className = "invalid";
+            statusText.innerHTML = "INVALID SIGNATURE";
+            keyDisplay.innerHTML = `<span class="key-id" style="color:#d32f2f; background:#ffebeb">${e.message}</span>`;
+            generateGeometricArt("geoArt", "ERROR", "INVALID");
+        }
+    }
+
+    verify();
+</script>
+</body>
+</html>
